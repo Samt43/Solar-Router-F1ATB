@@ -26,7 +26,7 @@ constexpr unsigned long CHANNEL_DWELL_INTERVAL = 1500;
 constexpr unsigned long SIGNAL_LOSS_TIMEOUT = 5000;
 constexpr uint8_t STATUS_LED_PIN = 2;  // Common classic ESP32 DevKit onboard LED
 constexpr bool STATUS_LED_ACTIVE_LOW = false;
-constexpr unsigned long LED_PULSE_DURATION = 100;  // Milliseconds
+constexpr unsigned long LED_PULSE_DURATION = 10;  // Milliseconds
 
 struct ReceivedMeasurements {
   uint8_t sender[6];
