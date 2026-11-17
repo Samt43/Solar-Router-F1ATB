@@ -144,7 +144,7 @@ const unsigned long MQTT_RECONNECT_INTERVAL = 5000;
 const unsigned long WIFI_RECONNECT_INTERVAL = 30000;
 const unsigned long WIFI_CONNECT_TIMEOUT = 10000;
 const unsigned long ENERGY_SAVE_INTERVAL = 20UL * 60UL * 1000UL;
-const unsigned long ESPNOW_PUBLISH_INTERVAL = 100;
+const unsigned long ESPNOW_PUBLISH_INTERVAL = 400;
 char availability_topic[100];
 
 // ========== SETUP ==========
