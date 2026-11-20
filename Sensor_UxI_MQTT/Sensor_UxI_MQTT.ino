@@ -15,7 +15,7 @@
   - Analog inputs: GPIO34 (voltage), GPIO32 (CT 1), GPIO35 (CT 2)
   - GPIO33: shared current sensor reference
   - Both CTs measure circuits on the same phase as the voltage sensor.
-  - Voltage phase correction: -0.3 degrees (lag) for both power calculations.
+  - Voltage phase correction: 24.58 degrees (sensor lag), adjusted per CT for the sequential ADC reads.
 
   OTA updates:
   - Set ota_password below; OTA stays disabled while it is empty.
@@ -87,8 +87,17 @@ const int AnalogIn3 = 35;  // CT 2 current input
 // Calibration constants - ADJUST THESE FOR YOUR SETUP
 // kV: voltage calibration (depends on transformer ratio and ADC resolution)
 // kI1, kI2: independent current calibration for each CT
-double kV = 0.7131086142;  // Calibrated from 267 V indicated to 238 V measured
-const double voltagePhaseCorrectionDegrees = -15;  // Negative delays voltage; RMS is unchanged
+double kV = 0.781991769474;  // Calibrated from 246 V indicated to 236 V measured
+// True voltage/current phase error of the sensors (current lags voltage), measured
+// with the sequential ADC read delay already removed. RMS is unchanged.
+const double sensorPhaseLagDegrees = 24.60;
+// Duration of one analogRead(). Each sample reads volt, then amp1, then amp2, so
+// amp1 is sampled 1 read after volt and amp2 2 reads after volt (50 Hz mains).
+const double adcReadMicros = 40.7;
+const double sequentialDegreesPerRead = 360.0 * 50.0 * adcReadMicros * 1e-6;
+// Negative delays the voltage; the sequential delay already delays the current, so it is subtracted.
+const double voltagePhaseCorrectionDegrees1 = -(sensorPhaseLagDegrees - 1.0 * sequentialDegreesPerRead);
+const double voltagePhaseCorrectionDegrees2 = -(sensorPhaseLagDegrees - 2.0 * sequentialDegreesPerRead);
 double kI1 = 0.0501687243686;
 double kI2 = 0.0165868112754; 
 
@@ -139,7 +148,7 @@ unsigned long lastEnergySave = 0;
 unsigned long lastEspNowPublish = 0;
 bool mqttAttempted = false;
 const unsigned long MEASURE_INTERVAL = 40;  // Match the router's 25 Hz measurement rate
-const unsigned long PUBLISH_INTERVAL = 15000;  // Publish every 15 seconds
+const unsigned long PUBLISH_INTERVAL = 1000;  // Publish every 15 seconds
 const unsigned long MQTT_RECONNECT_INTERVAL = 5000;
 const unsigned long WIFI_RECONNECT_INTERVAL = 30000;
 const unsigned long WIFI_CONNECT_TIMEOUT = 10000;
@@ -590,6 +599,16 @@ void MeasurePower() {
   }
 }
 
+// Voltage sample i delayed by `degrees` (negative = delay; 100 samples span 360 degrees),
+// linearly interpolated between two samples and wrapped within the mains cycle.
+static double ShiftedVoltage(const double *samples, int i, double degrees) {
+  const double sampleShift = degrees * 100.0 / 360.0;
+  const int indexShift = int(floor(sampleShift));
+  const double fraction = sampleShift - indexShift;
+  const int index = ((i + indexShift) % 100 + 100) % 100;
+  return (1.0 - fraction) * samples[index] + fraction * samples[(index + 1) % 100];
+}
+
 void ComputePower() {
   double PWcal1 = 0;
   double PWcal2 = 0;
@@ -616,29 +635,18 @@ void ComputePower() {
   currentOffset1 /= 100.0;
   currentOffset2 /= 100.0;
 
-  // 100 samples span 360 degrees: -0.3 degrees is a delay of 1/12 sample.
-  const double voltageSampleShift = voltagePhaseCorrectionDegrees * 100.0 / 360.0;
-  // floor(-1/12) = -1; the remaining fraction is 11/12.
-  const int voltageIndexShift = int(floor(voltageSampleShift));
-  const double voltageFraction = voltageSampleShift - voltageIndexShift;
-
   for (int i = 0; i < 100; i++) {
     V = kV * (voltM[i] - voltageOffset);
-    // Wrap within the mains cycle, including sample 99 before sample 0.
-    const int voltageIndex = ((i + voltageIndexShift) % 100 + 100) % 100;
-    const int nextVoltageIndex = (voltageIndex + 1) % 100;
-    // At -0.3 degrees: 1/12 of the previous sample + 11/12 of the current sample.
-    const double shiftedVoltage = (1.0 - voltageFraction) * voltM[voltageIndex]
-                                  + voltageFraction * voltM[nextVoltageIndex];
-    const double correctedV = kV * (shiftedVoltage - voltageOffset);
+    const double correctedV1 = kV * (ShiftedVoltage(voltM, i, voltagePhaseCorrectionDegrees1) - voltageOffset);
+    const double correctedV2 = kV * (ShiftedVoltage(voltM, i, voltagePhaseCorrectionDegrees2) - voltageOffset);
     I1 = kI1 * (ampM1[i] - currentOffset1);
     I2 = kI2 * (ampM2[i] - currentOffset2);
     // Keep RMS voltage unshifted; only real power uses the phase-corrected voltage.
     Uef2 += sq(V);
     Ief1Squared += sq(I1);
     Ief2Squared += sq(I2);
-    PWcal1 += correctedV * I1;
-    PWcal2 += correctedV * I2;
+    PWcal1 += correctedV1 * I1;
+    PWcal2 += correctedV2 * I2;
   }
   
   Uef2 = Uef2 / 100.0;
